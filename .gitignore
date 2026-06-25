@@ -216,3 +216,15 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Node
+node_modules/
+frontend/.next/
+frontend/dist/
+frontend/build/
+
+# ChromaDB local data
+backend/chroma_db/
+
+# Mac
+.DS_Store
