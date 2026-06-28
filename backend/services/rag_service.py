@@ -137,48 +137,88 @@ def store_chunks(
 
 
 # ── Step 4: Retrieving ─────────────────────────────────────────────────────────
-def retrieve_chunks(
-    query: str,
+# ── Step 5: Retrieval ──────────────────────────────────────────────────────────
+def retrieve_chunks_for_quiz(
     doc_id: str,
-    top_k: int = TOP_K_CHUNKS
+    text: str,
+    specific_topic: str | None = None,
 ) -> list[str]:
     """
-    Searches ChromaDB for the most relevant chunks for a given query.
-    Used during quiz generation to get the best context from the document.
+    Retrieves relevant chunks based on retrieval strategy:
+
+    Strategy 1 — specific_topic provided:
+        User wants quiz focused on a specific topic.
+        Retrieve chunks most relevant to that topic only.
+
+    Strategy 2 — no specific_topic:
+        User wants quiz from whole document.
+        Extract key topics first, retrieve chunks per topic,
+        combine for full document coverage.
 
     Args:
-        query: The search query (usually the quiz topic or document title)
         doc_id: Which document to search in
-        top_k: How many chunks to retrieve
+        text: Full document text (used for topic extraction)
+        specific_topic: Optional topic to focus on
 
     Returns:
-        List of the most relevant text chunks
+        List of relevant chunks
     """
-    logger.info(f"Retrieving top {top_k} chunks for doc_id: {doc_id}")
-
-    # Embed the query using the same model
-    # task_type is "retrieval_query" for search queries
-    query_embedding = genai.embed_content(
-        model=EMBEDDING_MODEL,
-        content=query,
-        task_type="retrieval_query",
-    )["embedding"]
-
-    # Search ChromaDB for similar chunks
     collection = get_or_create_collection(doc_id)
+    total_chunks = collection.count()
 
-    results = collection.query(
-        query_embeddings=[query_embedding],
-        n_results=min(top_k, collection.count()),  # don't request more than available
-        include=["documents", "distances"]
+    # ── Strategy 1: Specific topic retrieval ───────────────────────────────
+    if specific_topic:
+        logger.info(f"Strategy: specific topic retrieval → '{specific_topic}'")
+
+        query_embedding = genai.embed_content(
+            model=EMBEDDING_MODEL,
+            content=specific_topic,
+            task_type="retrieval_query",
+        )["embedding"]
+
+        results = collection.query(
+            query_embeddings=[query_embedding],
+            n_results=min(10, total_chunks),
+            include=["documents"]
+        )
+
+        chunks = results["documents"][0]
+        logger.info(f"Retrieved {len(chunks)} chunks for topic: '{specific_topic}'")
+        return chunks
+
+    # ── Strategy 2: Full document coverage ─────────────────────────────────
+    logger.info("Strategy: full document coverage via topic extraction")
+
+    topics = extract_key_topics(text)
+
+    all_chunks = []
+    seen_chunks = set()
+
+    for topic in topics:
+        logger.debug(f"Retrieving chunks for topic: '{topic}'")
+
+        query_embedding = genai.embed_content(
+            model=EMBEDDING_MODEL,
+            content=topic,
+            task_type="retrieval_query",
+        )["embedding"]
+
+        results = collection.query(
+            query_embeddings=[query_embedding],
+            n_results=min(TOP_K_PER_TOPIC, total_chunks),
+            include=["documents"]
+        )
+
+        for chunk in results["documents"][0]:
+            if chunk not in seen_chunks:
+                seen_chunks.add(chunk)
+                all_chunks.append(chunk)
+
+    logger.info(
+        f"Retrieved {len(all_chunks)} unique chunks "
+        f"across {len(topics)} topics for doc_id: {doc_id}"
     )
-
-    chunks = results["documents"][0]  # list of matching text chunks
-    distances = results["distances"][0]  # similarity scores
-
-    logger.info(f"Retrieved {len(chunks)} chunks (best similarity: {1 - distances[0]:.3f})")
-    return chunks
-
+    return all_chunks
 
 # ── Cleanup ────────────────────────────────────────────────────────────────────
 def delete_document_vectors(doc_id: str) -> None:
