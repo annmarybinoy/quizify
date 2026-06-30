@@ -9,16 +9,15 @@ Handles the complete RAG (Retrieval Augmented Generation) pipeline:
 """
 
 import uuid
-import google.generativeai as genai
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from google import genai
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from loguru import logger
 
 from config import settings
 from db.chroma import get_or_create_collection, delete_collection
 
-# Configure Gemini
-genai.configure(api_key=settings.GEMINI_API_KEY)
-
+# Initialize Gemini client
+client = genai.Client(api_key=settings.GEMINI_API_KEY)
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 CHUNK_SIZE = 500        # each chunk is ~500 words
@@ -73,12 +72,12 @@ def embed_chunks(chunks: list[str]) -> list[list[float]]:
     embeddings = []
 
     for i, chunk in enumerate(chunks):
-        result = genai.embed_content(
+        result = client.models.embed_content(
             model=EMBEDDING_MODEL,
-            content=chunk,
-            task_type="retrieval_document",  # optimized for storage/retrieval
+            contents=chunk,
+            config={"task_type": "retrieval_document"},
         )
-        embeddings.append(result["embedding"])
+        embeddings.append(result.embeddings[0].values)
 
         if (i + 1) % 10 == 0:
             logger.debug(f"Embedded {i + 1}/{len(chunks)} chunks")
@@ -170,11 +169,11 @@ def retrieve_chunks_for_quiz(
     if specific_topic:
         logger.info(f"Strategy: specific topic retrieval → '{specific_topic}'")
 
-        query_embedding = genai.embed_content(
+        query_embedding = client.models.embed_content(
             model=EMBEDDING_MODEL,
-            content=specific_topic,
-            task_type="retrieval_query",
-        )["embedding"]
+            contents=topic,
+            config={"task_type": "retrieval_query"},
+        ).embeddings[0].values
 
         results = collection.query(
             query_embeddings=[query_embedding],

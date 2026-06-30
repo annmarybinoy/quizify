@@ -11,7 +11,8 @@ All three return plain text that feeds into the RAG pipeline.
 
 import magic
 import pymupdf
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from PIL import Image
 from loguru import logger
 from fastapi import UploadFile, HTTPException
@@ -19,8 +20,8 @@ import io
 
 from config import settings
 
-# Configure Gemini
-genai.configure(api_key=settings.GEMINI_API_KEY)
+# Initialize Gemini client
+client = genai.Client(api_key=settings.GEMINI_API_KEY)
 
 
 # ── Constants ──────────────────────────────────────────────────────────────────
@@ -193,26 +194,33 @@ async def parse_image(file: UploadFile) -> str:
         # Open image using Pillow
         image = Image.open(io.BytesIO(contents))
 
-        # Initialize Gemini Vision model
-        model = genai.GenerativeModel("gemini-1.5-flash")
-
-        # Prompt Gemini to extract all content from the image
         prompt = """
-        You are a content extractor. Analyze this image and extract ALL text, 
-        information, and educational content from it.
-        
-        If it contains:
-        - Handwritten or printed text → transcribe it exactly
-        - Diagrams or charts → describe them in detail
-        - Tables → reproduce them as text
-        - Equations or formulas → write them out
-        - Any other educational content → describe it thoroughly
-        
-        Return ONLY the extracted content with no additional commentary.
-        The output will be used to generate quiz questions, so be thorough and accurate.
-        """
+You are a content extractor. Analyze this image and extract ALL text, 
+information, and educational content from it.
 
-        response = model.generate_content([prompt, image])
+If it contains:
+- Handwritten or printed text → transcribe it exactly
+- Diagrams or charts → describe them in detail
+- Tables → reproduce them as text
+- Equations or formulas → write them out
+- Any other educational content → describe it thoroughly
+
+Return ONLY the extracted content with no additional commentary.
+The output will be used to generate quiz questions, so be thorough and accurate.
+"""
+
+        # Convert PIL image to bytes for new API
+        img_byte_arr = io.BytesIO()
+        image.save(img_byte_arr, format=image.format or "PNG")
+        img_bytes = img_byte_arr.getvalue()
+
+        response = client.models.generate_content(
+            model="gemini-1.5-flash",
+            contents=[
+                types.Part.from_bytes(data=img_bytes, mime_type=file.content_type),
+                types.Part.from_text(text=prompt),
+            ]
+        )
         extracted_text = response.text
 
         if not extracted_text.strip():

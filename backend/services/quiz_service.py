@@ -17,12 +17,12 @@ import uuid
 from enum import Enum
 from typing import Optional
 from loguru import logger
-import google.generativeai as genai
-
+from google import genai
 from config import settings
+from google.genai import types
 
-# Configure Gemini
-genai.configure(api_key=settings.GEMINI_API_KEY)
+# Initialize Gemini client
+client = genai.Client(api_key=settings.GEMINI_API_KEY)
 
 GEMINI_MODEL = "gemini-1.5-flash"
 MAX_RETRIES = 3
@@ -318,14 +318,7 @@ def _call_gemini_with_retry(prompt: str, num_questions: int) -> dict:
     Raises:
         RuntimeError: If all retries are exhausted
     """
-    model = genai.GenerativeModel(
-        GEMINI_MODEL,
-        generation_config=genai.GenerationConfig(
-            temperature=0.7,
-            top_p=0.9,
-            max_output_tokens=4096,
-        )
-    )
+    
 
     last_error = None
     last_response = None
@@ -335,7 +328,15 @@ def _call_gemini_with_retry(prompt: str, num_questions: int) -> dict:
         try:
             logger.info(f"Calling Gemini for quiz generation (attempt {attempt}/{MAX_RETRIES})")
 
-            response = model.generate_content(current_prompt)
+            response = client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=current_prompt,
+                config=types.GenerateContentConfig(
+                    temperature=0.7,
+                    top_p=0.9,
+                    max_output_tokens=4096,
+                )
+            )
             last_response = response.text
 
             quiz_data = _parse_and_validate_response(response.text, num_questions)
