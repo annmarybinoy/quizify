@@ -152,7 +152,7 @@ async def parse_pdf(file: UploadFile) -> str:
 
             if text.strip():  # only add non-empty pages
                 extracted_text.append(f"[Page {page_num + 1}]\n{text}")
-
+        page_count = len(pdf_document)
         pdf_document.close()
 
         full_text = "\n\n".join(extracted_text)
@@ -163,7 +163,8 @@ async def parse_pdf(file: UploadFile) -> str:
                 detail="Could not extract text from PDF. The file may be scanned or image-based."
             )
 
-        logger.info(f"PDF parsed successfully: {len(full_text)} characters extracted from {len(pdf_document)} pages")
+        logger.info(f"PDF parsed successfully: {len(full_text)} characters extracted from {page_count} pages")
+
         return full_text
 
     except HTTPException:
