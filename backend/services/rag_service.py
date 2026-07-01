@@ -16,6 +16,9 @@ from loguru import logger
 from config import settings
 from db.chroma import get_or_create_collection, delete_collection
 
+GEMINI_MODEL = "gemini-3.5-flash"
+TOP_K_PER_TOPIC = 3
+
 # Initialize Gemini client
 client = genai.Client(api_key=settings.GEMINI_API_KEY)
 
@@ -23,7 +26,7 @@ client = genai.Client(api_key=settings.GEMINI_API_KEY)
 CHUNK_SIZE = 500        # each chunk is ~500 words
 CHUNK_OVERLAP = 50      # 50 word overlap between chunks so context isn't lost
 TOP_K_CHUNKS = 10       # retrieve top 10 most relevant chunks for quiz generation
-EMBEDDING_MODEL = "models/text-embedding-004"   # Gemini's free embedding model
+EMBEDDING_MODEL = "gemini-embedding-2"  # Gemini's free embedding model
 
 
 # ── Step 1: Chunking ───────────────────────────────────────────────────────────
@@ -75,7 +78,6 @@ def embed_chunks(chunks: list[str]) -> list[list[float]]:
         result = client.models.embed_content(
             model=EMBEDDING_MODEL,
             contents=chunk,
-            config={"task_type": "retrieval_document"},
         )
         embeddings.append(result.embeddings[0].values)
 
@@ -134,8 +136,50 @@ def store_chunks(
     logger.info(f"Stored {len(chunks)} chunks in ChromaDB for doc_id: {doc_id}")
     return doc_id
 
+# ── Step 4: Topic Extraction ───────────────────────────────────────────────────
+def extract_key_topics(text: str) -> list[str]:
+    """
+    Asks Gemini to identify the key topics covered in the document.
+    """
+    import json
+    logger.info("Extracting key topics from document...")
 
-# ── Step 4: Retrieving ─────────────────────────────────────────────────────────
+    sample = text[:3000]
+
+    prompt = f"""
+    Analyze this document sample and identify the 5 most important 
+    key topics or concepts covered in it.
+    
+    Return ONLY a JSON array of topic strings. No explanation, no markdown, 
+    just the raw JSON array.
+    
+    Example output: ["photosynthesis", "chlorophyll", "light reactions", "ATP synthesis", "calvin cycle"]
+    
+    Document sample:
+    {sample}
+    """
+
+    response = client.interactions.create(
+        model=GEMINI_MODEL,
+        input=prompt,
+    )
+    response_text = response.output_text.strip()
+    response_text = response_text.replace("```json", "").replace("```", "").strip()
+
+    try:
+        topics = json.loads(response_text)
+        if not isinstance(topics, list):
+            raise ValueError("Response is not a list")
+        logger.info(f"Extracted {len(topics)} key topics: {topics}")
+        return topics[:5]
+
+    except (json.JSONDecodeError, ValueError) as e:
+        logger.warning(f"Could not parse topics: {e}")
+        return [
+            text[:500],
+            text[len(text)//2:len(text)//2 + 500],
+            text[-500:]
+        ]
 # ── Step 5: Retrieval ──────────────────────────────────────────────────────────
 def retrieve_chunks_for_quiz(
     doc_id: str,
@@ -171,8 +215,7 @@ def retrieve_chunks_for_quiz(
 
         query_embedding = client.models.embed_content(
             model=EMBEDDING_MODEL,
-            contents=topic,
-            config={"task_type": "retrieval_query"},
+            contents=specific_topic,
         ).embeddings[0].values
 
         results = collection.query(
@@ -196,12 +239,10 @@ def retrieve_chunks_for_quiz(
     for topic in topics:
         logger.debug(f"Retrieving chunks for topic: '{topic}'")
 
-        query_embedding = genai.embed_content(
+        query_embedding = client.models.embed_content(
             model=EMBEDDING_MODEL,
-            content=topic,
-            task_type="retrieval_query",
-        )["embedding"]
-
+            contents=topic,
+        ).embeddings[0].values
         results = collection.query(
             query_embeddings=[query_embedding],
             n_results=min(TOP_K_PER_TOPIC, total_chunks),

@@ -19,12 +19,11 @@ from typing import Optional
 from loguru import logger
 from google import genai
 from config import settings
-from google.genai import types
 
 # Initialize Gemini client
 client = genai.Client(api_key=settings.GEMINI_API_KEY)
 
-GEMINI_MODEL = "gemini-1.5-flash"
+GEMINI_MODEL = "gemini-3.5-flash"
 MAX_RETRIES = 3
 
 
@@ -328,18 +327,12 @@ def _call_gemini_with_retry(prompt: str, num_questions: int) -> dict:
         try:
             logger.info(f"Calling Gemini for quiz generation (attempt {attempt}/{MAX_RETRIES})")
 
-            response = client.models.generate_content(
+            response = client.interactions.create(
                 model=GEMINI_MODEL,
-                contents=current_prompt,
-                config=types.GenerateContentConfig(
-                    temperature=0.7,
-                    top_p=0.9,
-                    max_output_tokens=4096,
-                )
+                input=current_prompt,
             )
-            last_response = response.text
-
-            quiz_data = _parse_and_validate_response(response.text, num_questions)
+            last_response = response.output_text
+            quiz_data = _parse_and_validate_response(response.output_text, num_questions)
 
             logger.info(f"Quiz generated successfully on attempt {attempt}")
             return quiz_data

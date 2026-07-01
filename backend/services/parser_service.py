@@ -12,11 +12,12 @@ All three return plain text that feeds into the RAG pipeline.
 import magic
 import pymupdf
 from google import genai
-from google.genai import types
 from PIL import Image
 from loguru import logger
 from fastapi import UploadFile, HTTPException
 import io
+import tempfile
+import os
 
 from config import settings
 
@@ -178,6 +179,7 @@ async def parse_pdf(file: UploadFile) -> str:
 async def parse_image(file: UploadFile) -> str:
     """
     Extracts text and content description from an image using Gemini Vision.
+    Uploads image via Files API then sends to Gemini Interactions API.
 
     Args:
         file: Uploaded image file
@@ -195,33 +197,50 @@ async def parse_image(file: UploadFile) -> str:
         image = Image.open(io.BytesIO(contents))
 
         prompt = """
-You are a content extractor. Analyze this image and extract ALL text, 
-information, and educational content from it.
+    You are a content extractor. Analyze this image and extract ALL text, 
+    information, and educational content from it.
 
-If it contains:
-- Handwritten or printed text → transcribe it exactly
-- Diagrams or charts → describe them in detail
-- Tables → reproduce them as text
-- Equations or formulas → write them out
-- Any other educational content → describe it thoroughly
+    If it contains:
+    - Handwritten or printed text → transcribe it exactly
+    - Diagrams or charts → describe them in detail
+    - Tables → reproduce them as text
+    - Equations or formulas → write them out
+    - Any other educational content → describe it thoroughly
 
-Return ONLY the extracted content with no additional commentary.
-The output will be used to generate quiz questions, so be thorough and accurate.
-"""
+    Return ONLY the extracted content with no additional commentary.
+    The output will be used to generate quiz questions, so be thorough and accurate.
+    """
 
-        # Convert PIL image to bytes for new API
-        img_byte_arr = io.BytesIO()
-        image.save(img_byte_arr, format=image.format or "PNG")
-        img_bytes = img_byte_arr.getvalue()
+        # Save image to temp file so we can upload via Files API
+        suffix = f".{image.format.lower() if image.format else 'png'}"
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+            image.save(tmp, format=image.format or "PNG")
+            tmp_path = tmp.name
 
-        response = client.models.generate_content(
-            model="gemini-1.5-flash",
-            contents=[
-                types.Part.from_bytes(data=img_bytes, mime_type=file.content_type),
-                types.Part.from_text(text=prompt),
-            ]
-        )
-        extracted_text = response.text
+        try:
+            # Upload image using Files API
+            my_file = client.files.upload(file=tmp_path)
+
+            # Send to Gemini Vision using Interactions API
+            response = client.interactions.create(
+                model="gemini-3.5-flash",
+                input=[
+                    {"type": "text", "text": prompt},
+                    {
+                        "type": "image",
+                        "uri": my_file.uri,
+                        "mime_type": my_file.mime_type
+                    }
+                ]
+            )
+            extracted_text = response.output_text
+
+            # Clean up uploaded file from Gemini
+            client.files.delete(name=my_file.name)
+
+        finally:
+            # Always delete temp file from disk
+            os.unlink(tmp_path)
 
         if not extracted_text.strip():
             raise HTTPException(
@@ -240,7 +259,6 @@ The output will be used to generate quiz questions, so be thorough and accurate.
             status_code=500,
             detail="Failed to analyze image. Please try again."
         )
-
 
 async def parse_text(text: str) -> str:
     """
